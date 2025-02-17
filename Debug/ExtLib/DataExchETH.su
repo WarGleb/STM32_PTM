@@ -1,0 +1,2 @@
+../ExtLib/DataExchETH.c:31:6:EthernetTask_Init	16	static
+../ExtLib/DataExchETH.c:45:13:Ethernet_Ti	16	static

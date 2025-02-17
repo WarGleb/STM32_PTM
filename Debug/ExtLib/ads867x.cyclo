@@ -1,0 +1,16 @@
+../ExtLib/ads867x.c:21:6:ADS867x_Init	1
+../ExtLib/ads867x.c:43:7:ADS867x_GetVoltage	1
+../ExtLib/ads867x.c:64:26:ADS867x_ReadADC	5
+../ExtLib/ads867x.c:104:10:ADS867x_R_REG	1
+../ExtLib/ads867x.c:133:6:ADS867x_RstPwdn	1
+../ExtLib/ads867x.c:162:6:ADS867x_SdiCtrl	1
+../ExtLib/ads867x.c:186:6:ADS867x_SdoCtrl	1
+../ExtLib/ads867x.c:210:6:ADS867x_SdoPinSetReset	2
+../ExtLib/ads867x.c:240:6:ADS867x_DataOutCtrl	1
+../ExtLib/ads867x.c:267:6:ADS867x_RangeSel	1
+../ExtLib/ads867x.c:287:17:ADS867x_ReadAlarm	1
+../ExtLib/ads867x.c:311:6:ADS867x_SetAlarmHTh	1
+../ExtLib/ads867x.c:339:6:ADS867x_SetAlarmLTh	1
+../ExtLib/ads867x.c:360:6:ADS867x_SPI_Tx	1
+../ExtLib/ads867x.c:372:6:ADS867x_SPI_Rx	1
+../ExtLib/ads867x.c:387:13:ADS867x_SPI_CS	2

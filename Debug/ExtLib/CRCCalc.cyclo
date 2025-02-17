@@ -1,0 +1,2 @@
+../ExtLib/CRCCalc.c:52:9:Soft_CRC8	2
+../ExtLib/CRCCalc.c:68:10:Hard_CRC32ETH	2

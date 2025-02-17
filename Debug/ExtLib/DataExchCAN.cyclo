@@ -1,0 +1,6 @@
+../ExtLib/DataExchCAN.c:59:6:DataExchCAN_Init	1
+../ExtLib/DataExchCAN.c:85:13:CmdCANTxRx_Ti	28
+../ExtLib/DataExchCAN.c:215:13:CAN_Config	1
+../ExtLib/DataExchCAN.c:251:13:CAN_ConfigBanks	1
+../ExtLib/DataExchCAN.c:276:13:CANRxFifo0Callback	1
+../ExtLib/DataExchCAN.c:295:13:CANRxFifo1Callback	1

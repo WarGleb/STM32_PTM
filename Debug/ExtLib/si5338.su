@@ -1,0 +1,7 @@
+../ExtLib/si5338.c:390:6:SI5338_Init	24	static,ignoring_inline_asm
+../ExtLib/si5338.c:484:9:SI5338_GetDevRevID	8	static
+../ExtLib/si5338.c:500:23:SI5338_GetDevCfg	16	static
+../ExtLib/si5338.c:521:9:SI5338_ReadReg	16	static
+../ExtLib/si5338.c:536:6:SI5338_WriteReg	16	static
+../ExtLib/si5338.c:551:13:SI5338_I2CRxData	40	static
+../ExtLib/si5338.c:559:13:SI5338_I2CTxData	40	static

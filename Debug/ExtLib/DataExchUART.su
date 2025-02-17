@@ -1,0 +1,10 @@
+../ExtLib/DataExchUART.c:81:6:DataExchUART_Init	16	static
+../ExtLib/DataExchUART.c:109:13:SysCmdMgmt_Ti	256	static,ignoring_inline_asm
+../ExtLib/DataExchUART.c:205:13:CmdParse_Ti	64	static
+../ExtLib/DataExchUART.c:353:13:CmdParse_Error	16	static
+../ExtLib/DataExchUART.c:374:13:CmdParse_FlushBuff	24	static
+../ExtLib/DataExchUART.c:392:16:CmdParse_SymbCnt	24	static
+../ExtLib/DataExchUART.c:414:16:CmdParse_RAWSymbCnt	24	static
+../ExtLib/DataExchUART.c:440:6:UART_SendMessage	16	static
+../ExtLib/DataExchUART.c:455:13:UART_RxFullCallback	16	static,ignoring_inline_asm
+../ExtLib/DataExchUART.c:466:13:UART_TxFullCallback	16	static,ignoring_inline_asm

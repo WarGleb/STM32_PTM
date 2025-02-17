@@ -1,0 +1,4 @@
+../ExtLib/x134.c:36:6:X134_Init	4	static
+../ExtLib/x134.c:50:6:X134_SetGain	16	static
+../ExtLib/x134.c:123:13:X134_ParalTxData	24	static,ignoring_inline_asm
+../ExtLib/x134.c:151:6:X110_ExtAMPControl	16	static

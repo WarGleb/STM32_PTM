@@ -1,0 +1,8 @@
+../Core/Src/SysTask.c:70:6:SysTask_Init	24	static
+../Core/Src/SysTask.c:107:13:Display_Ti	40	static
+../Core/Src/SysTask.c:164:13:AddrBtn_Ti	48	static
+../Core/Src/SysTask.c:236:13:Beep_Ti	24	static
+../Core/Src/SysTask.c:265:13:ScreenTim_Callback	16	static
+../Core/Src/SysTask.c:274:13:SysTim_Callback	16	static
+../Core/Src/SysTask.c:286:13:ConTimeout_Callback	16	static
+../Core/Src/SysTask.c:297:6:HAL_GPIO_EXTI_Callback	16	static

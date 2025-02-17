@@ -1,0 +1,11 @@
+../ExtLib/Common.c:38:6:DEV_RWGenEepAll	16	static
+../ExtLib/Common.c:50:13:DEV_GetType	4	static
+../ExtLib/Common.c:59:6:DEV_WriteDevType	16	static
+../ExtLib/Common.c:70:6:DEV_UpdateState	48	static
+../ExtLib/Common.c:89:6:DEV_UpdateList	32	static
+../ExtLib/Common.c:116:6:DEV_UpdateParams	32	static
+../ExtLib/Common.c:145:6:DEV_NameDecode	24	static
+../ExtLib/Common.c:184:9:DEV_DecToStateByte	24	static
+../ExtLib/Common.c:214:6:LED_Ctrl	16	static
+../ExtLib/Common.c:244:9:DEV_GetClockChannel	24	static
+../ExtLib/Common.c:256:6:BTN_SWPress	8	static

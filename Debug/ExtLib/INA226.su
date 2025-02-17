@@ -1,0 +1,15 @@
+../ExtLib/INA226.c:15:6:INA226_Init	24	static
+../ExtLib/INA226.c:33:19:INA226_WriteRegister	32	static
+../ExtLib/INA226.c:49:19:INA226_ReadRegister	40	static
+../ExtLib/INA226.c:69:19:INA226_SetConfiguration	32	static
+../ExtLib/INA226.c:83:19:INA226_Calibrate	32	static
+../ExtLib/INA226.c:96:19:INA226_ReadBusVoltage	32	static
+../ExtLib/INA226.c:112:19:INA226_ReadShuntVoltage	32	static
+../ExtLib/INA226.c:128:19:INA226_ReadCurrent	32	static
+../ExtLib/INA226.c:144:19:INA226_ReadPower	32	static
+../ExtLib/INA226.c:160:19:INA226_SetAlertLimit	16	static
+../ExtLib/INA226.c:171:19:INA226_ReadAlertLimit	24	static
+../ExtLib/INA226.c:182:19:INA226_SetMaskEnable	16	static
+../ExtLib/INA226.c:193:19:INA226_ReadMaskEnable	24	static
+../ExtLib/INA226.c:204:19:INA226_ReadManufacturerID	24	static
+../ExtLib/INA226.c:215:19:INA226_ReadDieID	24	static
