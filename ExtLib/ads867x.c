@@ -8,10 +8,10 @@
 #include "ads867x.h"
 #include "spi.h"
 
-/* Определение количества устройств в цепочке.
-   Каждое устройство передаёт 32 бита (4 байта). */
-#define NUM_DEVICES   2                  // Например, 2 устройства в цепочке
-#define ADS_BYTES     (NUM_DEVICES * 4)    // Общее число байт, передаваемых/принимаемых по SPI
+/* Define the number of devices in the daisy chain.
+   Each device transmits 32 bits (4 bytes). */
+#define NUM_DEVICES   4                  // For example, 4 devices in the chain
+#define ADS_BYTES     (NUM_DEVICES * 4)    // Total number of bytes transmitted/received via SPI
 
 /* External variables. */
 extern SPI_HandleTypeDef hspi1;
@@ -20,25 +20,25 @@ extern SPI_HandleTypeDef hspi1;
 static void ADS867x_SPI_CS(GPIO_TypeDef* gpio, uint16_t gpio_pin, uint8_t state);
 
 /*
- * @brief ADC init function.
+ * @brief ADC initialization function.
  *
  **/
 void ADS867x_Init(void) {
 	
-	/* General data struct of ADC unit. */
+	/* General data structure of the ADC unit. */
 	ADS867x_GInst_t ads8671 = { 		
 		.delay = HAL_Delay,
 		.spi_tx = ADS867x_SPI_Tx,
 		.spi_rx = ADS867x_SPI_Rx
 	};
 	
-	/* Set SPI configuration and GPIO function of SDO1 pin. */
-	// ADS867x_SdoCtrl(&ads8671, 0, 0, ADS867x_SDO1_GPO);	
+	/* Set SPI configuration and GPIO function for the SDO1 pin. */
+	// ADS867x_SdoCtrl(&ads8671, 0, 0, ADS867x_SDO1_GPO);
 	/* Enable LED on the ADC's pin. */
-	// ADS867x_SdoPinSetReset(&ads8671, 1);	
+	// ADS867x_SdoPinSetReset(&ads8671, 1);
 	/* Enable ADC's test data sequence. */
 	ADS867x_DataOutCtrl(&ads8671, ADS867x_CONVDATA, 0, 0, ADS867x_ACTIVE_IN_DO_NOT_INCL, ADS867x_ACTIVE_VDD_DO_NOT_INCL, 0);
-	/* Selecting ADC input range. */
+	/* Select ADC input range. */
 	ADS867x_RangeSel(&ads8671, ADS867x_P1_25VREF, 0);
 }
 
@@ -48,7 +48,7 @@ void ADS867x_Init(void) {
  **/
 float ADS867x_GetVoltage(void) {
 	
-	/* General data struct of ADC unit. */
+	/* General data structure of the ADC unit. */
 	ADS867x_GInst_t ads8671 = { 
 		.tx_byte_cnt = &hspi1.TxXferCount,
 		.rx_byte_cnt = &hspi1.RxXferCount,
@@ -57,19 +57,19 @@ float ADS867x_GetVoltage(void) {
 		.spi_rx = ADS867x_SPI_Rx
 	};
 
-	/* Пример расчёта напряжения на основе полученных данных.
-	   Здесь извлекается результат (например, от последнего устройства в цепочке). */
+	/* Example calculation of voltage based on the received data.
+	   Here, the result (for example, from the last device in the chain) is extracted. */
 	return ADS867x_VALUE_OF_DIVISION * (uint16_t)(ADS867x_ReadADC(&ads8671).DataWord_HSW_MSB >> 18);
 }
 
 /*
  * @brief Read ADC conversion data in daisy chain mode.
- *        В режиме daisy chain ADC-ы соединены последовательно, поэтому суммарная длина сдвигового регистра равна NUM_DEVICES * 32 бит.
- *        Для чтения данных отправляется буфер из NUM_DEVICES*4 байт (каждый байт содержит команду NOP),
- *        после чего принимается такой же объём данных.
+ *        In daisy chain mode, the ADCs are connected in series, so the total shift register length
+ *        is NUM_DEVICES * 32 bits. To read the data, a buffer of NUM_DEVICES*4 bytes (each byte contains the NOP command)
+ *        is transmitted, and then the same amount of data is received.
  *
- * @param *device : Instance of the general data struct ADS867x_GInst_t.
- * @return 14-bit ADC data from one selected device (например, от последнего в цепочке).
+ * @param *device : Instance of the general data structure ADS867x_GInst_t.
+ * @return 14-bit ADC data from one selected device (for example, from the last device in the chain).
  **/
 ADS867x_OutputDataWord_t ADS867x_ReadADC(ADS867x_GInst_t* device)
 {
@@ -78,12 +78,12 @@ ADS867x_OutputDataWord_t ADS867x_ReadADC(ADS867x_GInst_t* device)
 	uint8_t i;
 	ADS867x_OutputDataWord_t result;
 	
-	/* Заполняем буфер значениями NOP для всех устройств */
+	/* Fill the buffer with NOP values for all devices */
 	for (i = 0; i < ADS_BYTES; i++) {
 		buffer[i] = ADS867x_NOP;
 	}
 	
-	/* Передаём буфер – генерируем такты для сдвига данных от всех устройств */
+	/* Transmit the buffer to generate clock pulses for shifting data from all devices */
 	device->spi_tx(buffer, ADS_BYTES);
 	
 	while (*device->tx_byte_cnt > 0) {
@@ -91,10 +91,10 @@ ADS867x_OutputDataWord_t ADS867x_ReadADC(ADS867x_GInst_t* device)
 		if (timeout == 0) { __NOP(); break; }
 	}
 	
-	// При необходимости можно добавить короткую задержку:
+	// Optionally, add a short delay:
 	// device->delay(1);
 	
-	/* Принимаем NUM_DEVICES*4 байт данных */
+	/* Receive NUM_DEVICES*4 bytes of data */
 	device->spi_rx(buffer, ADS_BYTES);
 	timeout = 10000;
 	while (*device->rx_byte_cnt > 0) {
@@ -103,9 +103,9 @@ ADS867x_OutputDataWord_t ADS867x_ReadADC(ADS867x_GInst_t* device)
 	}
 	
 	/* 
-	 * Парсинг полученного буфера.
-	 * Предполагается, что данные каждого устройства передаются последовательно.
-	 * Здесь в качестве примера выбирается результат последнего устройства в цепочке.
+	 * Parse the received buffer.
+	 * It is assumed that the data from each device is transmitted consecutively.
+	 * Here, as an example, the result from the last device in the chain is selected.
 	 */
 	result.DataWord_HSW_MSB = buffer[ADS_BYTES - 4];
 	result.DataWord_HSW_LSB = buffer[ADS_BYTES - 3];
@@ -118,8 +118,8 @@ ADS867x_OutputDataWord_t ADS867x_ReadADC(ADS867x_GInst_t* device)
 /*
  * @brief Read device register.
  * 
- * @param *device : Instance of the general data struct ADS867x_GInst_t.
- * @param address : Device address that you wish.
+ * @param *device : Instance of the general data structure ADS867x_GInst_t.
+ * @param address : Device register address to be read.
  *
  **/
 uint16_t ADS867x_R_REG(ADS867x_GInst_t* device, uint8_t address)
@@ -135,19 +135,19 @@ uint16_t ADS867x_R_REG(ADS867x_GInst_t* device, uint8_t address)
 	device->delay(1);
 	device->spi_rx(&device->data.DataWord_LSW_MSB, 2);
 	device->delay(1);
-	Data  = ((uint16_t)device->data.DataWord_LSW_MSB << 8) | (uint16_t)device->data.DataWord_LSW_LSB;	
+	Data = ((uint16_t)device->data.DataWord_LSW_MSB << 8) | (uint16_t)device->data.DataWord_LSW_LSB;	
 	return Data;
 }
 
 /*
  * @brief Controls the reset and power-down features.
  * 
- * @param *device : Instance of the general data struct ADS867x_GInst_t.
+ * @param *device : Instance of the general data structure ADS867x_GInst_t.
  * @param pwrdn : 0 puts the converter into active mode, 1 puts the converter into power-down mode.
- * @param nap_en : 0 disables the NAP mode of the converter, 1 enables NAP mode if CONVST/CS удерживается после завершения текущего преобразования.
- * @param rstn_app : Если 0, RST работает как POR reset (полная инициализация), если 1 – как application reset.
- * @param in_al_dis : 0 – input alarm включён, 1 – отключён.
- * @param vdd_al_dis : 0 – VDD alarm включён, 1 – отключён.
+ * @param nap_en : 0 disables NAP mode, 1 enables NAP mode if CONVST/CS is held high after the current conversion.
+ * @param rstn_app : If 0, RST functions as a POR reset (full initialization); if 1, as an application reset.
+ * @param in_al_dis : 0 enables the input alarm, 1 disables it.
+ * @param vdd_al_dis : 0 enables the VDD alarm, 1 disables it.
  *
  **/
 void ADS867x_RstPwdn(ADS867x_GInst_t* device, uint8_t pwrdn, uint8_t nap_en, uint8_t rstn_app, uint8_t in_al_dis, uint8_t vdd_al_dis)
@@ -175,8 +175,8 @@ void ADS867x_RstPwdn(ADS867x_GInst_t* device, uint8_t pwrdn, uint8_t nap_en, uin
 /*
  * @brief Configures the protocol used for writing data.
  * 
- * @param *device : Instance of the general data struct ADS867x_GInst_t.
- * @param protocol : Selects the SPI protocol, см. ADS867x_SPI_PROTOCOL_t enum (по умолчанию ADS867x_CPOL0_CPHASE0).
+ * @param *device : Instance of the general data structure ADS867x_GInst_t.
+ * @param protocol : Selects the SPI protocol, see ADS867x_SPI_PROTOCOL_t enum (default ADS867x_CPOL0_CPHASE0).
  *
  **/
 void ADS867x_SdiCtrl(ADS867x_GInst_t* device, ADS867x_SPI_PROTOCOL_t protocol)
@@ -192,13 +192,13 @@ void ADS867x_SdiCtrl(ADS867x_GInst_t* device, ADS867x_SPI_PROTOCOL_t protocol)
 }
 
 /*
- * @brief Controls data protocol used to transmit data from the SDO-x pins.
- * NOTE: Функция сбрасывает GPO pin (GPO_VAL) в 0.
+ * @brief Controls the data protocol used to transmit data from the SDO-x pins.
+ * NOTE: This function resets the GPO pin (GPO_VAL) to 0.
  * 
- * @param *device : Instance of the general data struct ADS867x_GInst_t.
- * @param sdo_mode : Если 0xb – SDO mode соответствует SPI протоколу SDI (по умолчанию).
- * @param ssync_clk : Если 0 – внешняя SCLK (без деления, по умолчанию), 1 – внутренняя SCLK.
- * @param sdo1_config : Конфигурация ALARM/SDO-1/GPO, см. ADS867x_SDO1_MODE_t.
+ * @param *device : Instance of the general data structure ADS867x_GInst_t.
+ * @param sdo_mode : If 0xb, SDO mode follows the same SPI protocol as SDI (default).
+ * @param ssync_clk : If 0, external SCLK is selected (no division, default); if 1, internal SCLK is selected.
+ * @param sdo1_config : Configuration for ALARM/SDO-1/GPO, see ADS867x_SDO1_MODE_t.
  *
  **/
 void ADS867x_SdoCtrl(ADS867x_GInst_t* device, uint8_t sdo_mode, uint8_t ssync_clk, ADS867x_SDO1_MODE_t sdo1_config)
@@ -211,17 +211,17 @@ void ADS867x_SdoCtrl(ADS867x_GInst_t* device, uint8_t sdo_mode, uint8_t ssync_cl
 	SdoCtrlReg.GPO_VAL = 0;
 	
 	device->data.ADDRESS = ADS867x_SDO_CTL_LSW;
-	device->data.COMMAND = ADS867x_WRITE_HWORD;	
+	device->data.COMMAND = ADS867x_WRITE_HWORD;
 	device->data.REG_DATA_LSB = SdoCtrlReg.SdoCtrlReg_LSW;
 	device->data.REG_DATA_MSB = SdoCtrlReg.SdoCtrlReg_LSW >> 8;
 	device->spi_tx(&device->data.Command, 4);		
 }
 
 /*
- * @brief Drives logical level of general purpose pin (SDO1 as a GPO).
+ * @brief Drives the logical level of the general purpose pin (SDO1 used as a GPO).
  * 
- * @param *device : Instance of the general data struct ADS867x_GInst_t.
- * @param sdo_val : 1-битное значение для выхода (0 или 1).
+ * @param *device : Instance of the general data structure ADS867x_GInst_t.
+ * @param sdo_val : 1-bit value for the output (0 or 1).
  *
  **/
 void ADS867x_SdoPinSetReset(ADS867x_GInst_t* device, uint8_t sdo_val)
@@ -239,15 +239,15 @@ void ADS867x_SdoPinSetReset(ADS867x_GInst_t* device, uint8_t sdo_val)
 }
 
 /*
- * @brief Selects data format for the output data.
+ * @brief Selects the data format for the output data.
  * 
- * @param *device : Instance of the general data struct ADS867x_GInst_t.
- * @param data_val : Определяет значение данных, см. ADS867x_DataVal enum.
- * @param par_en : 0 – данные без паритета, 1 – с двумя битами паритета.
- * @param range_incl : 0 – не включать значение диапазона, 1 – включить.
- * @param in_active_alarm_incl : Включить флаги input ALARM.
- * @param vdd_active_alarm_incl : Включить флаги VDD ALARM.
- * @param device_addr_incl : 0 – не включать, 1 – включать.
+ * @param *device : Instance of the general data structure ADS867x_GInst_t.
+ * @param data_val : Defines the data value, see ADS867x_DataVal enum.
+ * @param par_en : 0 means data without parity; 1 means data with two parity bits.
+ * @param range_incl : 0 means do not include the range value; 1 means include it.
+ * @param in_active_alarm_incl : Include input alarm flags.
+ * @param vdd_active_alarm_incl : Include VDD alarm flags.
+ * @param device_addr_incl : 0 means do not include; 1 means include.
  *
  **/
 void ADS867x_DataOutCtrl(ADS867x_GInst_t* device, ADS867x_DATA_VAL_t data_val, ADS867x_PAR_t par_en, ADS867x_RANGE_INCL_t range_incl, 
@@ -270,11 +270,11 @@ void ADS867x_DataOutCtrl(ADS867x_GInst_t* device, ADS867x_DATA_VAL_t data_val, A
 }
 
 /*
- * @brief Selects either internal or external reference and input range.
+ * @brief Selects either the internal or external reference and input range.
  * 
- * @param *device : Instance of the general data struct ADS867x_GInst_t.
- * @param range_sel : Выбор диапазона входного сигнала, см. ADS867x_INPUT_RANGE_t.
- * @param intref_dis : 0 – включить внутреннее опорное напряжение, 1 – отключить.
+ * @param *device : Instance of the general data structure ADS867x_GInst_t.
+ * @param range_sel : Selection of the input signal range, see ADS867x_INPUT_RANGE_t.
+ * @param intref_dis : 0 to enable the internal reference voltage, 1 to disable.
  *
  **/
 void ADS867x_RangeSel(ADS867x_GInst_t* device, ADS867x_INPUT_RANGE_t range_sel, uint8_t intref_dis)
@@ -292,9 +292,9 @@ void ADS867x_RangeSel(ADS867x_GInst_t* device, ADS867x_INPUT_RANGE_t range_sel, 
 }
 
 /*
- * @brief Return output condition of the alarm flags.
+ * @brief Returns the output condition of the alarm flags.
  * 
- * @param *device : Instance of the general data struct ADS867x_GInst_t.
+ * @param *device : Instance of the general data structure ADS867x_GInst_t.
  *
  **/
 ADS867x_Alarm_t ADS867x_ReadAlarm(ADS867x_GInst_t* device)
@@ -314,9 +314,9 @@ ADS867x_Alarm_t ADS867x_ReadAlarm(ADS867x_GInst_t* device)
 }
 
 /*
- * @brief Sets hysteresis and high threshold for the input alarm.
+ * @brief Sets the hysteresis and high threshold for the input alarm.
  * 
- * @param *device : Instance of the general data struct ADS867x_GInst_t.
+ * @param *device : Instance of the general data structure ADS867x_GInst_t.
  * @param inp_alrm_high_th : 14-bit threshold for comparison.
  * @param inp_alrm_hyst : 4-bit hysteresis value.
  *
@@ -343,9 +343,9 @@ void ADS867x_SetAlarmHTh(ADS867x_GInst_t* device, uint16_t inp_alrm_high_th, uin
 }
 
 /*
- * @brief Sets low threshold for the input alarm.
+ * @brief Sets the low threshold for the input alarm.
  * 
- * @param *device : Instance of the general data struct ADS867x_GInst_t.
+ * @param *device : Instance of the general data structure ADS867x_GInst_t.
  * @param inp_alrm_low_th : 14-bit threshold for comparison.
  *
  **/
@@ -391,9 +391,9 @@ void ADS867x_SPI_Rx(uint8_t *pData, uint8_t size) {
 /*
  * @brief SPI chip select.
  * 
- * @param gpio : Например, CS_ADC_GPIO_Port.
- * @param gpio_pin : Например, CS_ADC_Pin.
- * @param state : GPIO_PIN_SET или GPIO_PIN_RESET.
+ * @param gpio : For example, CS_ADC_GPIO_Port.
+ * @param gpio_pin : For example, CS_ADC_Pin.
+ * @param state : GPIO_PIN_SET or GPIO_PIN_RESET.
  *
  **/
 static void ADS867x_SPI_CS(GPIO_TypeDef* gpio, uint16_t gpio_pin, uint8_t state) {
