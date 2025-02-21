@@ -1,419 +1,346 @@
-/*
- * @brief Common driver for ADS8671, ADS8675 from Texas Instruments.
- *        Modified for daisy chain mode (N devices in series: one long shift register).
- * Created 08.02.21 by asw3005. Modified 21.02.XX by ChatGPT.
- *
- **/
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2023 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
 
-#include "ads867x.h"
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "cmsis_os.h"
+#include "can.h"
+#include "crc.h"
+#include "dma.h"
+#include "eth.h"
+#include "i2c.h"
+#include "rng.h"
 #include "spi.h"
+#include "tim.h"
+#include "usart.h"
+#include "gpio.h"
+#include "ads867x.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
 
-/* Select the SPI handle used by the ADS867x driver.
-   To change the SPI instance, define ADS867X_SPI_HANDLE externally.
-   Default is hspi3.
+#define DEBUG_RELAY_TEST
+
+extern TIM_HandleTypeDef* BeepTim;
+
+/* Define the SPI handle for the ADS867x driver.
+   If not defined externally, default to hspi3.
 */
 #ifndef ADS867X_SPI_HANDLE
-  #define ADS867X_SPI_HANDLE hspi3
+#define ADS867X_SPI_HANDLE hspi3
 #endif
 
-/* Define the number of devices in the daisy chain.
-   Each device transmits 32 bits (4 bytes).
-*/
-#define NUM_DEVICES   4                  // For example, 4 devices in the chain
-#define ADS_BYTES     (NUM_DEVICES * 4)    // Total number of bytes transmitted/received via SPI
+/* Definitions for daisy chain mode */
+#ifndef NUM_DEVICES
+  #define NUM_DEVICES   4                  // Number of ADS867x devices in the chain
+#endif
+#ifndef ADS_BYTES
+  #define ADS_BYTES     (NUM_DEVICES * 4)    // Total number of bytes (4 bytes per device)
+#endif
 
-/* External variables. */
-extern SPI_HandleTypeDef ADS867X_SPI_HANDLE;  // hspi3 must be defined in your project
+/* Public function prototypes. */
+void SysTask_Init(void);
+void DataExchUART_Init(void);
+void DataExchCAN_Init(void);
+void EthernetTask_Init(void);
 
-/* Private function prototypes. */
-static void ADS867x_SPI_CS(GPIO_TypeDef* gpio, uint16_t gpio_pin, uint8_t state);
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+void Error_Handler(void);
 
-/*
- * @brief ADC initialization function.
- *
- **/
-void ADS867x_Init(void) {
-	
-	/* General data structure of the ADC unit. */
-	ADS867x_GInst_t ads8671 = { 		
-		.delay = HAL_Delay,
-		.spi_tx = ADS867x_SPI_Tx,
-		.spi_rx = ADS867x_SPI_Rx
-	};
-	
-	/* Set SPI configuration and GPIO function for the SDO1 pin. */
-	// ADS867x_SdoCtrl(&ads8671, 0, 0, ADS867x_SDO1_GPO);
-	/* Enable LED on the ADC's pin. */
-	// ADS867x_SdoPinSetReset(&ads8671, 1);
-	/* Enable ADC's test data sequence. */
-	ADS867x_DataOutCtrl(&ads8671, ADS867x_CONVDATA, 0, 0, ADS867x_ACTIVE_IN_DO_NOT_INCL, ADS867x_ACTIVE_VDD_DO_NOT_INCL, 0);
-	/* Select ADC input range. */
-	ADS867x_RangeSel(&ads8671, ADS867x_P1_25VREF, 0);
-}
-
-/*
- * @brief Get voltage from ADC.
- *
- **/
-float ADS867x_GetVoltage(void) {
-	
-	/* General data structure of the ADC unit.
-	   Note that we now use ADS867X_SPI_HANDLE for accessing the SPI counters.
-	*/
-	ADS867x_GInst_t ads8671 = { 
-		.tx_byte_cnt = &ADS867X_SPI_HANDLE.TxXferCount,
-		.rx_byte_cnt = &ADS867X_SPI_HANDLE.RxXferCount,
-		.delay = HAL_Delay,
-		.spi_tx = ADS867x_SPI_Tx,
-		.spi_rx = ADS867x_SPI_Rx
-	};
-
-	/* Example calculation of voltage based on the received data.
-	   Here, the result (for example, from the last device in the chain) is extracted.
-	*/
-	return ADS867x_VALUE_OF_DIVISION * (uint16_t)(ADS867x_ReadADC(&ads8671).DataWord_HSW_MSB >> 18);
-}
-
-/*
- * @brief Read ADC conversion data in daisy chain mode.
- *        In daisy chain mode, the ADCs are connected in series, so the total shift register length
- *        is NUM_DEVICES * 32 bits. To read the data, a buffer of NUM_DEVICES*4 bytes (each byte contains the NOP command)
- *        is transmitted, and then the same amount of data is received.
- *
- * @param *device : Instance of the general data structure ADS867x_GInst_t.
- * @return 14-bit ADC data from one selected device (for example, from the last device in the chain).
- **/
-ADS867x_OutputDataWord_t ADS867x_ReadADC(ADS867x_GInst_t* device)
+/* ------------------ ADC Block Reading Function ------------------ */
+/**
+  * @brief Read full raw data block from the daisy chain of ADS867x devices.
+  *        This function uses only functions from the ADS867x driver.
+  * @param device: Pointer to ADC instance structure.
+  * @param pBuffer: Pointer to the buffer where the complete data block will be stored.
+  *                 The buffer size must be at least ADS_BYTES bytes.
+  * @param size: Size of the buffer in bytes.
+  */
+static void ADS867x_ReadADC_Block(ADS867x_GInst_t* device, uint8_t *pBuffer, uint8_t size)
 {
-	uint16_t timeout = 10000;
-	uint8_t buffer[ADS_BYTES];
-	uint8_t i;
-	ADS867x_OutputDataWord_t result;
-	
-	/* Fill the buffer with NOP values for all devices */
-	for (i = 0; i < ADS_BYTES; i++) {
-		buffer[i] = ADS867x_NOP;
-	}
-	
-	/* Transmit the buffer to generate clock pulses for shifting data from all devices */
-	device->spi_tx(buffer, ADS_BYTES);
-	
-	while (*device->tx_byte_cnt > 0) {
-		timeout--;
-		if (timeout == 0) { __NOP(); break; }
-	}
+    uint16_t timeout = 10000;
+    uint8_t i;
 
-	// Optionally, add a short delay:
-	// device->delay(1);
-	
-	/* Receive NUM_DEVICES*4 bytes of data */
-	device->spi_rx(buffer, ADS_BYTES);
-	timeout = 10000;
-	while (*device->rx_byte_cnt > 0) {
-		timeout--;
-		if (timeout == 0) { __NOP(); break; }
-	}
+    if (size < ADS_BYTES)
+    {
+        /* Buffer too small – handle error as needed */
+        return;
+    }
 
-	/*
-	 * Parse the received buffer.
-	 * It is assumed that the data from each device is transmitted consecutively.
-	 * Here, as an example, the result from the last device in the chain is selected.
-	 */
-	result.DataWord_HSW_MSB = buffer[ADS_BYTES - 4];
-	result.DataWord_HSW_LSB = buffer[ADS_BYTES - 3];
-	result.DataWord_LSW_MSB = buffer[ADS_BYTES - 2];
-	result.DataWord_LSW_LSB = buffer[ADS_BYTES - 1];
-	
-	return result;
+    /* Fill the buffer with NOP commands for all devices */
+    for (i = 0; i < ADS_BYTES; i++) {
+        pBuffer[i] = ADS867x_NOP;
+    }
+
+    /* Transmit the buffer to generate clock pulses for shifting data from all devices */
+    device->spi_tx(pBuffer, ADS_BYTES);
+    while (*device->tx_byte_cnt > 0)
+    {
+        if (--timeout == 0) break;
+    }
+
+    // Optionally, add a short delay:
+    // device->delay(1);
+
+    timeout = 10000;
+    /* Receive ADS_BYTES bytes of data */
+    device->spi_rx(pBuffer, ADS_BYTES);
+    while (*device->rx_byte_cnt > 0)
+    {
+        if (--timeout == 0) break;
+    }
 }
+/* ------------------ End of ADC Block Reading Function ------------------ */
 
-/*
- * @brief Read device register.
- * 
- * @param *device : Instance of the general data structure ADS867x_GInst_t.
- * @param address : Device register address to be read.
- *
- **/
-uint16_t ADS867x_R_REG(ADS867x_GInst_t* device, uint8_t address)
+/* ------------------ ADC Polling Task Code ------------------ */
+
+/* Declare a queue handle to store ADC data (the complete 16-byte block) */
+QueueHandle_t adcDataQueueHandle = NULL;
+
+/* Prototype for the ADC polling task */
+void StartAdcTask(void *argument);
+
+/**
+  * @brief Create ADC task and its queue.
+  * Call this function after all peripherals are initialized, before starting the scheduler.
+  */
+void CreateAdcTask(void)
 {
-	uint16_t Data = 0;
-	
-	device->data.ADDRESS = address;
-	device->data.COMMAND = ADS867x_READ_HWORD;
-	device->data.REG_DATA_LSB = 0;
-	device->data.REG_DATA_MSB = 0;
-	device->spi_tx(&device->data.Command, 4);
-	
-	device->delay(1);
-	device->spi_rx(&device->data.DataWord_LSW_MSB, 2);
-	device->delay(1);
-	Data = ((uint16_t)device->data.DataWord_LSW_MSB << 8) | (uint16_t)device->data.DataWord_LSW_LSB;
-	return Data;
+    /* Create a queue to hold 10 blocks of ADC data (each block is ADS_BYTES bytes) */
+    adcDataQueueHandle = xQueueCreate(10, sizeof(uint8_t) * ADS_BYTES);
+    if (adcDataQueueHandle == NULL)
+    {
+         /* Queue creation failed */
+         Error_Handler();
+    }
+
+    /* Create the ADC polling task with low priority (lowest: tskIDLE_PRIORITY) */
+    if (xTaskCreate(StartAdcTask, "ADC_Task", 256, NULL, tskIDLE_PRIORITY, NULL) != pdPASS)
+    {
+         /* Task creation failed */
+         Error_Handler();
+    }
 }
 
-/*
- * @brief Controls the reset and power-down features.
- * 
- * @param *device : Instance of the general data structure ADS867x_GInst_t.
- * @param pwrdn : 0 puts the converter into active mode, 1 puts the converter into power-down mode.
- * @param nap_en : 0 disables NAP mode, 1 enables NAP mode if CONVST/CS is held high after the current conversion.
- * @param rstn_app : If 0, RST functions as a POR reset (full initialization); if 1, as an application reset.
- * @param in_al_dis : 0 enables the input alarm, 1 disables it.
- * @param vdd_al_dis : 0 enables the VDD alarm, 1 disables it.
- *
- **/
-void ADS867x_RstPwdn(ADS867x_GInst_t* device, uint8_t pwrdn, uint8_t nap_en, uint8_t rstn_app, uint8_t in_al_dis, uint8_t vdd_al_dis)
+/**
+  * @brief ADC polling task.
+  * This task initializes the ADC via ADS867x_Init(), then periodically polls the entire daisy chain
+  * by calling ADS867x_ReadADC_Block() (which uses only functions from the ADS867x driver).
+  * The complete raw data block (ADS_BYTES bytes, e.g. 16 bytes for 4 devices) is then posted to a FreeRTOS queue.
+  * The task runs at a low priority.
+  */
+void StartAdcTask(void *argument)
 {
-	ADS867x_RstPwrCtrl_t RstPwrCtlReg;
-	
-	RstPwrCtlReg.PWRDN = pwrdn;
-	RstPwrCtlReg.NAP_EN = nap_en;
-	RstPwrCtlReg.RSTn_APP = rstn_app;
-	RstPwrCtlReg.IN_AL_DIS = in_al_dis;
-	RstPwrCtlReg.VDD_AL_DIS = vdd_al_dis;
-	RstPwrCtlReg.WKEY = ADS867x_WKEY;
-	
-	device->data.ADDRESS = ADS867x_RST_PWRCTL_LSW;
-	device->data.COMMAND = ADS867x_WRITE_MSB;
-	device->data.REG_DATA_LSB = 0;
-	device->data.REG_DATA_MSB = ADS867x_WKEY;
-	device->spi_tx(&device->data.Command, 4);
-	device->delay(1);
-	device->data.COMMAND = ADS867x_WRITE_LSB;
-	device->data.REG_DATA_LSB = (uint8_t)RstPwrCtlReg.RstPwrCtrlReg_LSW;
-	device->spi_tx(&device->data.Command, 4);
-}
+    ADS867x_GInst_t ads_inst;
+    /* Initialize the ADC instance with pointers to SPI functions and counters.
+       All operations use ADS867X_SPI_HANDLE (default hspi3).
+    */
+    ads_inst.tx_byte_cnt = &ADS867X_SPI_HANDLE.TxXferCount;
+    ads_inst.rx_byte_cnt = &ADS867X_SPI_HANDLE.RxXferCount;
+    ads_inst.delay     = HAL_Delay;
+    ads_inst.spi_tx    = ADS867x_SPI_Tx;
+    ads_inst.spi_rx    = ADS867x_SPI_Rx;
 
-/*
- * @brief Configures the protocol used for writing data.
- * 
- * @param *device : Instance of the general data structure ADS867x_GInst_t.
- * @param protocol : Selects the SPI protocol, see ADS867x_SPI_PROTOCOL_t enum (default ADS867x_CPOL0_CPHASE0).
- *
- **/
-void ADS867x_SdiCtrl(ADS867x_GInst_t* device, ADS867x_SPI_PROTOCOL_t protocol)
+    /* Initialize ADC settings using the driver function */
+    ADS867x_Init();
+
+    /* Buffer to hold the complete raw data block (ADS_BYTES bytes) */
+    uint8_t adcBuffer[ADS_BYTES];
+
+    for (;;)
+    {
+         /* Poll the ADC chain using the ADS867x driver function */
+         ADS867x_ReadADC_Block(&ads_inst, adcBuffer, ADS_BYTES);
+
+         /* Post the full data block to the FreeRTOS queue */
+         xQueueSend(adcDataQueueHandle, adcBuffer, portMAX_DELAY);
+
+         /* Delay before next polling cycle (adjust period as necessary) */
+         vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+/* ------------------ End of ADC Polling Task Code ------------------ */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
 {
-	// ADS867x_SdiCtrl_t SdiCtrlReg;
-	// SdiCtrlReg.SDI_MODE = protocol;
-	
-	device->data.ADDRESS = ADS867x_SDI_CTL_LSW;
-	device->data.COMMAND = ADS867x_WRITE_LSB;
-	device->data.REG_DATA_LSB = protocol;
-	device->data.REG_DATA_MSB = 0;
-	device->spi_tx(&device->data.Command, 4);	
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_DMA_Init();
+  //MX_ETH_Init();
+  MX_USART3_UART_Init();
+  MX_I2C1_Init();
+  MX_I2C2_Init();
+  MX_SPI6_Init();
+  MX_SPI3_Init();
+  MX_UART7_Init();
+  MX_TIM4_Init();
+  MX_CRC_Init();
+  MX_RNG_Init();
+  MX_CAN1_Init();
+  MX_SPI4_Init();
+
+  /* Start up beep. */
+#ifdef DEBUG_RELAY_TEST
+  HAL_GPIO_WritePin(PUMP_OUT_CTRL_GPIO_Port, PUMP_OUT_CTRL_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(HV_PUMP_LOCK_GPIO_Port, HV_PUMP_LOCK_Pin, GPIO_PIN_SET);
+#endif
+
+  for (uint8_t i = 3; i > 0; i--) {
+      HAL_TIM_PWM_Start(BeepTim, TIM_CHANNEL_1);
+      HAL_Delay(150);
+      HAL_TIM_PWM_Stop(BeepTim, TIM_CHANNEL_1);
+      HAL_Delay(150);
+  }
+
+#ifdef DEBUG_RELAY_TEST
+  HAL_GPIO_WritePin(PUMP_OUT_CTRL_GPIO_Port, PUMP_OUT_CTRL_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(HV_PUMP_LOCK_GPIO_Port, HV_PUMP_LOCK_Pin, GPIO_PIN_RESET);
+#endif
+
+  /* Call initialization functions for other FreeRTOS objects */
+  SysTask_Init();
+  DataExchUART_Init();
+  DataExchCAN_Init();
+  EthernetTask_Init();
+
+  /* Create ADC polling task (low priority) */
+  CreateAdcTask();
+
+  /* Start scheduler */
+  osKernelStart();
+
+  /* We should never get here as control is now taken by the scheduler */
+  while (1)
+  {
+  }
 }
 
-/*
- * @brief Controls the data protocol used to transmit data from the SDO-x pins.
- * NOTE: This function resets the GPO pin (GPO_VAL) to 0.
- * 
- * @param *device : Instance of the general data structure ADS867x_GInst_t.
- * @param sdo_mode : If 0xb, SDO mode follows the same SPI protocol as SDI (default).
- * @param ssync_clk : If 0, external SCLK is selected (no division, default); if 1, internal SCLK is selected.
- * @param sdo1_config : Configuration for ALARM/SDO-1/GPO, see ADS867x_SDO1_MODE_t.
- *
- **/
-void ADS867x_SdoCtrl(ADS867x_GInst_t* device, uint8_t sdo_mode, uint8_t ssync_clk, ADS867x_SDO1_MODE_t sdo1_config)
+/**
+  * @brief System Clock Configuration
+  * @retval None.
+  */
+void SystemClock_Config(void)
 {
-	ADS867x_SdoCtrl_t SdoCtrlReg;
-	
-	SdoCtrlReg.SDO_MODE = sdo_mode;
-	SdoCtrlReg.SSYNC_CLK = ssync_clk;
-	SdoCtrlReg.SDO1_CONFIG = sdo1_config;
-	SdoCtrlReg.GPO_VAL = 0;
-	
-	device->data.ADDRESS = ADS867x_SDO_CTL_LSW;
-	device->data.COMMAND = ADS867x_WRITE_HWORD;
-	device->data.REG_DATA_LSB = SdoCtrlReg.SdoCtrlReg_LSW;
-	device->data.REG_DATA_MSB = SdoCtrlReg.SdoCtrlReg_LSW >> 8;
-	device->spi_tx(&device->data.Command, 4);		
+    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+    /** Configure the main internal regulator output voltage */
+    __HAL_RCC_PWR_CLK_ENABLE();
+    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+    /** Initializes the RCC Oscillators according to the specified parameters
+      * in the RCC_OscInitTypeDef structure.
+      */
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+    RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+    RCC_OscInitStruct.PLL.PLLM = 15;
+    RCC_OscInitStruct.PLL.PLLN = 216;
+    RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+    RCC_OscInitStruct.PLL.PLLQ = 8;
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+    {
+      Error_Handler();
+    }
+
+    /** Activate the Over-Drive mode */
+    if (HAL_PWREx_EnableOverDrive() != HAL_OK)
+    {
+      Error_Handler();
+    }
+
+    /** Initializes the CPU, AHB and APB buses clocks */
+    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                                  |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+
+    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
+    {
+      Error_Handler();
+    }
+    HAL_RCC_MCOConfig(RCC_MCO1, RCC_MCO1SOURCE_HSE, RCC_MCODIV_1);
 }
 
-/*
- * @brief Drives the logical level of the general purpose pin (SDO1 used as a GPO).
- * 
- * @param *device : Instance of the general data structure ADS867x_GInst_t.
- * @param sdo_val : 1-bit value for the output (0 or 1).
- *
- **/
-void ADS867x_SdoPinSetReset(ADS867x_GInst_t* device, uint8_t sdo_val)
-{	
-	device->data.ADDRESS = ADS867x_SDO_CTL_LSW;	
-	if (sdo_val) {
-		device->data.COMMAND = ADS867x_SET_HWORD;
-	}
-	else {
-		device->data.COMMAND = ADS867x_RESET_HWORD;
-	}	
-	device->data.REG_DATA_LSB = 0;
-	device->data.REG_DATA_MSB = 0x10;
-	device->spi_tx(&device->data.Command, 4);
-}
+/* USER CODE BEGIN 4 */
 
-/*
- * @brief Selects the data format for the output data.
- * 
- * @param *device : Instance of the general data structure ADS867x_GInst_t.
- * @param data_val : Defines the data value, see ADS867x_DataVal enum.
- * @param par_en : 0 means data without parity; 1 means data with two parity bits.
- * @param range_incl : 0 means do not include the range value; 1 means include it.
- * @param in_active_alarm_incl : Include input alarm flags.
- * @param vdd_active_alarm_incl : Include VDD alarm flags.
- * @param device_addr_incl : 0 means do not include; 1 means include.
- *
- **/
-void ADS867x_DataOutCtrl(ADS867x_GInst_t* device, ADS867x_DATA_VAL_t data_val, ADS867x_PAR_t par_en, ADS867x_RANGE_INCL_t range_incl, 
-	ADS867x_IN_ACTIVE_ALARM_t in_active_alarm_incl, ADS867x_VDD_ACTIVE_ALARM_t vdd_active_alarm_incl, ADS867x_DEV_ADDR_INCL_t device_addr_incl)
+/* USER CODE END 4 */
+
+/**
+  * @brief  Period elapsed callback in non blocking mode.
+  * @note   This function is called when TIM7 interrupt occurs, inside HAL_TIM_IRQHandler().
+  *         It directly calls HAL_IncTick() to increment the global "uwTick" used as application time base.
+  * @param  htim : TIM handle.
+  * @retval None.
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-	ADS867x_DataOut_t DataOutReg;
-	
-	DataOutReg.DATA_VAL = data_val;
-	DataOutReg.PAR_EN = par_en;
-	DataOutReg.RANGE_INCL = range_incl;
-	DataOutReg.IN_ACTIVE_ALARM_INCL = in_active_alarm_incl;
-	DataOutReg.VDD_ACTIVE_ALARM_INCL = vdd_active_alarm_incl;
-	DataOutReg.DEVICE_ADDR_INCL = device_addr_incl;
-	
-	device->data.ADDRESS = ADS867x_DATAOUT_CTL_LSW;
-	device->data.COMMAND = ADS867x_WRITE_HWORD;
-	device->data.REG_DATA_LSB = DataOutReg.DataOutReg_LSW;
-	device->data.REG_DATA_MSB = DataOutReg.DataOutReg_LSW >> 8;
-	device->spi_tx(&device->data.Command, 4);
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM7) {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
 }
 
-/*
- * @brief Selects either the internal or external reference and input range.
- * 
- * @param *device : Instance of the general data structure ADS867x_GInst_t.
- * @param range_sel : Selection of the input signal range, see ADS867x_INPUT_RANGE_t.
- * @param intref_dis : 0 to enable the internal reference voltage, 1 to disable.
- *
- **/
-void ADS867x_RangeSel(ADS867x_GInst_t* device, ADS867x_INPUT_RANGE_t range_sel, uint8_t intref_dis)
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None.
+  */
+void Error_Handler(void)
 {
-	ADS867x_RangeSel_t RangeSelReg;
-	
-	RangeSelReg.RANGE_SEL = range_sel;
-	RangeSelReg.INTREF_DIS = intref_dis;
-	
-	device->data.ADDRESS = ADS867x_RANGE_SEL_LSW;
-	device->data.COMMAND = ADS867x_WRITE_HWORD;
-	device->data.REG_DATA_LSB = RangeSelReg.RangeSelReg_LSW;
-	device->data.REG_DATA_MSB = RangeSelReg.RangeSelReg_LSW >> 8;
-	device->spi_tx(&device->data.Command, 4);	
+  /* USER CODE BEGIN Error_Handler_Debug */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
 }
 
-/*
- * @brief Returns the output condition of the alarm flags.
- * 
- * @param *device : Instance of the general data structure ADS867x_GInst_t.
- *
- **/
-ADS867x_Alarm_t ADS867x_ReadAlarm(ADS867x_GInst_t* device)
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error occurred.
+  * @param  file: pointer to the source file name.
+  * @param  line: assert_param error line source number.
+  * @retval None.
+  */
+void assert_failed(uint8_t *file, uint32_t line)
 {
-	ADS867x_Alarm_t AlarmReg;
-	
-	device->data.ADDRESS = ADS867x_ALARM_LSW;
-	device->data.COMMAND = ADS867x_READ_HWORD;
-	device->data.REG_DATA_LSB = 0;
-	device->data.REG_DATA_MSB = 0;
-	device->spi_tx(&device->data.Command, 4);
-	device->delay(1);
-	device->spi_rx((uint8_t*)&device->data, 2);
-	AlarmReg.AlarmReg_LSW = ((uint16_t)device->data.REG_DATA_MSB << 8) | (uint16_t)device->data.REG_DATA_LSB;
-	
-	return AlarmReg;
+  /* USER CODE BEGIN 6 */
+  /* Example: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
 }
-
-/*
- * @brief Sets the hysteresis and high threshold for the input alarm.
- * 
- * @param *device : Instance of the general data structure ADS867x_GInst_t.
- * @param inp_alrm_high_th : 14-bit threshold for comparison.
- * @param inp_alrm_hyst : 4-bit hysteresis value.
- *
- **/
-void ADS867x_SetAlarmHTh(ADS867x_GInst_t* device, uint16_t inp_alrm_high_th, uint8_t inp_alrm_hyst)
-{
-	ADS867x_AlarmHTh_t AlarmHthReg;
-	
-	AlarmHthReg.RESERVED1_0 = 0;
-	AlarmHthReg.RESERVED27_24 = 0;
-	AlarmHthReg.INP_ALRM_HIGH_TH = inp_alrm_high_th;	
-	AlarmHthReg.INP_ALRM_HYST = inp_alrm_hyst;
-	
-	device->data.ADDRESS = ADS867x_ALARM_H_TH_LSW;
-	device->data.COMMAND = ADS867x_WRITE_HWORD;
-	device->data.REG_DATA_LSB = AlarmHthReg.AlarmHTh_LSW;
-	device->data.REG_DATA_MSB = AlarmHthReg.AlarmHTh_LSW >> 8;
-	device->spi_tx(&device->data.Command, 4);
-	device->delay(1);
-	device->data.ADDRESS = ADS867x_ALARM_H_TH_HSW;
-	device->data.REG_DATA_LSB = AlarmHthReg.AlarmHTh_HSW;
-	device->data.REG_DATA_MSB = AlarmHthReg.AlarmHTh_HSW >> 8;
-	device->spi_tx(&device->data.Command, 4);	
-}
-
-/*
- * @brief Sets the low threshold for the input alarm.
- * 
- * @param *device : Instance of the general data structure ADS867x_GInst_t.
- * @param inp_alrm_low_th : 14-bit threshold for comparison.
- *
- **/
-void ADS867x_SetAlarmLTh(ADS867x_GInst_t* device, uint16_t inp_alrm_low_th)
-{
-	ADS867x_AlarmLTh_t AlarmLThReg;
-	
-	AlarmLThReg.RESERVED1_0 = 0;
-	AlarmLThReg.INP_ALRM_LOW_TH = inp_alrm_low_th;
-	
-	device->data.ADDRESS = ADS867x_ALARM_L_TH_LSW;
-	device->data.COMMAND = ADS867x_WRITE_HWORD;
-	device->data.REG_DATA_LSB = AlarmLThReg.AlarmLTh_LSW;
-	device->data.REG_DATA_MSB = AlarmLThReg.AlarmLTh_LSW >> 8;
-	device->spi_tx(&device->data.Command, 4);	
-}
-
-
-/* Hardware dependent functions. */
-
-/*
- * @brief Transmits data via SPI.
- *
- **/
-void ADS867x_SPI_Tx(uint8_t *pData, uint8_t size) {
-	
-	ADS867x_SPI_CS(CS_ADC_GPIO_Port, CS_ADC_Pin, 0);
-	HAL_SPI_Transmit(&ADS867X_SPI_HANDLE, pData, size, 10);
-	ADS867x_SPI_CS(CS_ADC_GPIO_Port, CS_ADC_Pin, 1);
-}
-
-/*
- * @brief Receives data via SPI.
- *
- **/
-void ADS867x_SPI_Rx(uint8_t *pData, uint8_t size) {
-	
-	ADS867x_SPI_CS(CS_ADC_GPIO_Port, CS_ADC_Pin, 0);
-	HAL_SPI_Receive(&ADS867X_SPI_HANDLE, pData, size, 10);
-	ADS867x_SPI_CS(CS_ADC_GPIO_Port, CS_ADC_Pin, 1);
-}
-
-/*
- * @brief SPI chip select.
- * 
- * @param gpio : For example, CS_ADC_GPIO_Port.
- * @param gpio_pin : For example, CS_ADC_Pin.
- * @param state : GPIO_PIN_SET or GPIO_PIN_RESET.
- *
- **/
-static void ADS867x_SPI_CS(GPIO_TypeDef* gpio, uint16_t gpio_pin, uint8_t state) {
-	
-	if (state > 0) {
-		gpio->BSRR = gpio_pin;
-	}
-	else {
-		gpio->BSRR = gpio_pin << 16;
-	}	
-}
+#endif /* USE_FULL_ASSERT */
